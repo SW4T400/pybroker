@@ -323,6 +323,7 @@ class ModelsMixin:
         """
         pred_train={}
         pred_test={}
+        indis={}
         
         
         if train_data.empty or not model_syms:
@@ -385,11 +386,23 @@ class ModelsMixin:
             )
             
             
+            # get indis
+            #-----------------------------------------------------------------
+            columns_not_in_test_data = sym_test_data.columns.difference(
+                            test_data.columns.union(["pred"])) #=indis cols
+            
+            indis[model_sym]=pd.concat([sym_train_data[columns_not_in_test_data], 
+                                        sym_test_data[columns_not_in_test_data]], 
+                                       axis=0)
+            
             # Get columns exclusive to train_data
             # exclusive_columns = sym_train_data.columns.difference(test_data.columns)
             # Filter train_data to keep only exclusive columns
             # temp_train = sym_train_data.copy()[exclusive_columns]
             # temp_test = sym_test_data.copy()[exclusive_columns]
+            
+            # get predictions
+            #-----------------------------------------------------------------
             
             pred_train[model_sym] = sym_train_data.copy()["pred"]
             pred_test[model_sym] = sym_test_data.copy()["pred"]
@@ -404,7 +417,7 @@ class ModelsMixin:
             )
         scope.logger.train_split_completed()
 
-        return models,pred_train,pred_test
+        return models,pred_train,pred_test,indis
 
     def _slice_by_symbol(self, symbol: str, df: pd.DataFrame) -> pd.DataFrame:
         return (

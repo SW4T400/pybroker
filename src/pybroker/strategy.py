@@ -1208,7 +1208,7 @@ class Strategy(
                 self._config.max_long_positions,
                 self._config.max_short_positions,
             )
-            pred_train_list, pred_test_list, models_list=self._run_walkforward(
+            pred_train_list, pred_test_list, models_list,indis_list=self._run_walkforward(
                 portfolio=portfolio,
                 df=df,
                 indicator_data=indicator_data,
@@ -1223,11 +1223,78 @@ class Strategy(
                 warmup=warmup,
             )
             
+            # INDICATORS - stolen from train / test model data!
+            #TODO: what happens if we have no models?
+            
+            # i should take indis from train/test and only keep first occuring index!
+               
+            # combine data for each model sym
+            merged_dfs = {}    
+            for dictionary in indis_list:
+                for key, dfi in dictionary.items():
+                    # If the key already exists in the merged_dfs dictionary, merge the DataFrames
+                    if key in merged_dfs:
+                        # merged_dfs[key] = pd.concat(merged_dfs[key], dfi)
+                        merged_dfs[key] = pd.concat([merged_dfs[key], dfi])  # 
+                    else:
+                        merged_dfs[key] = dfi  # I
+                        
+                        # concatenated_df = pd.concat([merged_dfs[key], df])
+            # model sym dataframes into list with unique ids
+            # i can keep first in order to ignor overlapping train/test parts
+            concat_list=[]            
+            for key, dfi in merged_dfs.items():
+                concat_list.append(dfi[~dfi.index.duplicated(keep='first')])
+                
+            indi_cols=pd.concat(concat_list).sort_index()
+            
+            
+            df=pd.concat([df,indi_cols],axis=1)
+            
+            # MODEL PREDICTIONS
+            # list of dicts to single series for pred column
             train_series = [value for d in pred_train_list for value in d.values()]
             df["pred_train"]=pd.concat(train_series).sort_index()
             
             test_series = [value for d in pred_test_list for value in d.values()]
             df["pred_test"]=pd.concat(test_series).sort_index()
+            
+           
+            
+            
+            
+            
+            
+            
+            #TODO: this line puts series only where dates match, but assumes
+            # symbol is already correct! Also it writes to entire column - makes
+            # a new one i mean and its not yet existing!
+            
+            # sym_test_data[ind_name] = ind_series[ind_series.index.isin(test_dates)
+            # ].values
+            
+            # # ind series to df for merging
+            
+            # ind_list = []
+            # for key, series in indicator_data.items():
+            #     ind_name, symbol = key
+            #     dfi = pd.DataFrame(series, columns=[ind_name])
+            #     dfi['symbol'] = symbol
+            #     dfi=dfi.reset_index()
+            #     dfi = dfi.rename(columns={'index': 'date'})
+            #     ind_list.append(dfi)
+  
+            # unique_ind_names = set(key[0] for key in indicator_data.keys())
+            
+            # for ind_name in unique_ind_names:
+            #     df[ind_name] = pd.Series(dtype=float) 
+            
+            # # input (merge) the indicator df´s into the main df
+            # for dfii in ind_list:
+            #     # Merge based on 'date' and 'symbol'
+            #     df = pd.merge(df, dfii, on=list(dfii.columns), how='inner')
+                
+                
             
             if train_only:
                 self._logger.walkforward_completed()
@@ -1332,6 +1399,7 @@ class Strategy(
         pred_train_list=[] # how to iteration results end up further downstream?
         pred_test_list=[]
         models_list=[]# they didnt, i have to implement it myself
+        indis_list=[]
         
         for train_idx, test_idx in self.walkforward_split(
             df=df,
@@ -1357,7 +1425,7 @@ class Strategy(
                 train_dates = train_data[DataCol.DATE.value].unique()
                 train_dates.sort()
                 #30.11.2023
-                models,pred_train,pred_test = self.train_models(
+                models,pred_train,pred_test,indis = self.train_models(
                     model_syms=model_syms,
                     train_data=train_data,
                     test_data=test_data,
@@ -1374,6 +1442,7 @@ class Strategy(
                 pred_train_list.append(pred_train)
                 pred_test_list.append(pred_test)
                 models_list.append(models)
+                indis_list.append(indis)
                 
                 # if not testdict=={}:
                 #     print(".") 
@@ -1405,7 +1474,7 @@ class Strategy(
                     enable_fractional_shares=self._fractional_shares_enabled(),
                     warmup=warmup,
                 )
-        return pred_train_list, pred_test_list, models_list       
+        return pred_train_list, pred_test_list, models_list ,indis_list    
 
     def _filter_dates(
         self,
