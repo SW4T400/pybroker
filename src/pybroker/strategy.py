@@ -1208,7 +1208,7 @@ class Strategy(
                 self._config.max_long_positions,
                 self._config.max_short_positions,
             )
-            self._run_walkforward(
+            pred_train_list, pred_test_list, models_list=self._run_walkforward(
                 portfolio=portfolio,
                 df=df,
                 indicator_data=indicator_data,
@@ -1222,10 +1222,58 @@ class Strategy(
                 train_only=train_only,
                 warmup=warmup,
             )
+            
+            train_series = [value for d in pred_train_list for value in d.values()]
+            df["pred_train"]=pd.concat(train_series).sort_index()
+            
+            test_series = [value for d in pred_test_list for value in d.values()]
+            df["pred_test"]=pd.concat(test_series).sort_index()
+            
             if train_only:
                 self._logger.walkforward_completed()
-                return None
-            return self._to_test_result(
+                
+                # list of dicts of model sym (key) - series (value) pairs
+                # for all walkforward windows.
+                
+                
+
+                # merged_dfs = {}
+
+                # # Iterate through the list of dictionaries
+                # for dictionary in pred_test_list:
+                #     for key, df in dictionary.items():
+                #         # If the key already exists in the merged_dfs dictionary, merge the DataFrames
+                #         if key in merged_dfs:
+                #             merged_dfs[key] = pd.concat(merged_dfs[key], df)
+                            
+                #             # concatenated_df = pd.concat([merged_dfs[key], df])
+                #             # merged_dfs[key] = concatenated_df.sort_index()
+                            
+                #         else:
+                #             merged_dfs[key] = df  # I
+                
+                
+                # unique_keys = {key for dict_ in aaa for key in dict_}
+                
+                #     for ind_name, series in ind_series.items():
+                #         data[ind_name].extend(series.values)
+                
+                
+                # sym_dict: dict[str, dict[str, pd.Series]] = defaultdict(dict)
+                # for ind_sym, series in ind_dict.items():
+                #     sym_dict[ind_sym.symbol][ind_sym.ind_name] = series
+                # data: dict[str, list] = defaultdict(list)
+                # for sym, ind_series in sym_dict.items():
+                #     dates = df[df[DataCol.SYMBOL.value] == sym][DataCol.DATE.value]
+                #     data[DataCol.SYMBOL.value].extend(
+                #         itertools.repeat(sym, len(dates))
+                #     )
+                #     data[DataCol.DATE.value].extend(dates)
+                #     for ind_name, series in ind_series.items():
+                #         data[ind_name].extend(series.values)
+                # return pd.DataFrame.from_dict(data)
+                return df
+            return df, self._to_test_result(
                 start_dt, end_dt, portfolio, calc_bootstrap
             )
         finally:
@@ -1279,6 +1327,12 @@ class Strategy(
                     if len(sym_dates):
                         sym_dates.sort()
                         exit_dates[sym] = sym_dates[-1]
+                        
+        #TODO: NOTE this loops over the Walkforward windows!
+        pred_train_list=[] # how to iteration results end up further downstream?
+        pred_test_list=[]
+        models_list=[]# they didnt, i have to implement it myself
+        
         for train_idx, test_idx in self.walkforward_split(
             df=df,
             windows=windows,
@@ -1287,6 +1341,9 @@ class Strategy(
             shuffle=shuffle,
         ):
             models: dict[ModelSymbol, TrainedModel] = {}
+            traindict: dict[ModelSymbol, pd.DataFrame] = {}
+            testdict: dict[ModelSymbol, pd.DataFrame] = {}
+            
             train_data = df.loc[train_idx]
             test_data = df.loc[test_idx]
             if not train_data.empty:
@@ -1299,7 +1356,8 @@ class Strategy(
                 }
                 train_dates = train_data[DataCol.DATE.value].unique()
                 train_dates.sort()
-                models = self.train_models(
+                #30.11.2023
+                models,pred_train,pred_test = self.train_models(
                     model_syms=model_syms,
                     train_data=train_data,
                     test_data=test_data,
@@ -1312,6 +1370,24 @@ class Strategy(
                         days=days,
                     ),
                 )
+                
+                pred_train_list.append(pred_train)
+                pred_test_list.append(pred_test)
+                models_list.append(models)
+                
+                # if not testdict=={}:
+                #     print(".") 
+                #     # could extend the dicts value (which is df) by mergin?
+                #     # testdict[key] =  testdict[key]+pred_train_data[key]
+                #     # + means do a merge!
+                #     # also maybe only export index and prediction value for 
+                #     # performance?
+                #     #TODO: ↑ OR could also leave as is, export 2x lists and
+                #     # combine at the end? (i prefer doingt it here for performance)
+                # else:
+                #     testdict=pred_data
+                
+
             if not train_only and not test_data.empty:
                 self.backtest_executions(
                     config=self._config,
@@ -1329,6 +1405,7 @@ class Strategy(
                     enable_fractional_shares=self._fractional_shares_enabled(),
                     warmup=warmup,
                 )
+        return pred_train_list, pred_test_list, models_list       
 
     def _filter_dates(
         self,

@@ -321,6 +321,10 @@ class ModelsMixin:
             ``dict`` mapping each :class:`pybroker.common.ModelSymbol` pair
             to a :class:`pybroker.common.TrainedModel`.
         """
+        pred_train={}
+        pred_test={}
+        
+        
         if train_data.empty or not model_syms:
             return {}
         scope = StaticScope.instance()
@@ -379,11 +383,28 @@ class ModelsMixin:
                 predict_fn=source._predict_fn,
                 input_cols=input_cols,
             )
+            
+            
+            # Get columns exclusive to train_data
+            # exclusive_columns = sym_train_data.columns.difference(test_data.columns)
+            # Filter train_data to keep only exclusive columns
+            # temp_train = sym_train_data.copy()[exclusive_columns]
+            # temp_test = sym_test_data.copy()[exclusive_columns]
+            
+            pred_train[model_sym] = sym_train_data.copy()["pred"]
+            pred_test[model_sym] = sym_test_data.copy()["pred"]
+            
+            # temp_train=temp_train.rename(columns={'pred': 'pred_train'})
+            # temp_test=temp_test.rename(columns={'pred': 'pred_test'})
+              
+            # pred_data[model_sym]=pd.concat([temp_train, temp_test], axis=0)
+ 
             self._set_cached_model(
                 model, input_cols, model_sym, cache_date_fields
             )
         scope.logger.train_split_completed()
-        return models
+
+        return models,pred_train,pred_test
 
     def _slice_by_symbol(self, symbol: str, df: pd.DataFrame) -> pd.DataFrame:
         return (
