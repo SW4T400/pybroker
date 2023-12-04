@@ -1260,40 +1260,7 @@ class Strategy(
                 for ind_name, dfs_list in indi_dfs.items():
                     # indi_dfs[ind_name] = pd.concat(dfs_list)
                     df[ind_name]=pd.concat(dfs_list)
-            
                 
-            
-            
-            # # INDICATORS - stolen from train / test model data! 
-            # # ----------------------------------------------------------------
-            # if 'indis_list' in locals(): # does it exist? - continue
-            #     if indis_list :   # non Empty List, continue
-            #         print("test")
-            #         # combine data for each model sym
-            #         merged_dfs = {}    
-            #         for dictionary in indis_list:
-            #             for key, dfi in dictionary.items():
-            #                 # If the key already exists in the merged_dfs dictionary, merge the DataFrames
-            #                 if key in merged_dfs:
-            #                     # merged_dfs[key] = pd.concat(merged_dfs[key], dfi)
-            #                     merged_dfs[key] = pd.concat([merged_dfs[key], dfi])  # 
-            #                 else:
-            #                     merged_dfs[key] = dfi  # I
-                                
-            #         # concatenated_df = pd.concat([merged_dfs[key], df])
-            #         # model sym dataframes into list with unique ids
-            #         # i can keep first in order to ignor overlapping train/test parts
-
-            #         concat_list=[]            
-            #         for key, dfi in merged_dfs.items():
-            #             concat_list.append(dfi[~dfi.index.duplicated(keep='first')])
-                        
-            #         indi_cols=pd.concat(concat_list).sort_index()
-                    
-                    
-            #         df=pd.concat([df,indi_cols],axis=1)
-                    
-   
             # MODELS   
             # ----------------------------------------------------------------
             if 'pred_train_list' in locals(): # does it exist? - continue
@@ -1415,18 +1382,6 @@ class Strategy(
                 pred_test_list.append(pred_test)
                 models_list.append(models)
                 indis_list.append(indis)
-                
-                # if not testdict=={}:
-                #     print(".") 
-                #     # could extend the dicts value (which is df) by mergin?
-                #     # testdict[key] =  testdict[key]+pred_train_data[key]
-                #     # + means do a merge!
-                #     # also maybe only export index and prediction value for 
-                #     # performance?
-                #     #TODO: ↑ OR could also leave as is, export 2x lists and
-                #     # combine at the end? (i prefer doingt it here for performance)
-                # else:
-                #     testdict=pred_data
                 
 
             if not train_only and not test_data.empty:
