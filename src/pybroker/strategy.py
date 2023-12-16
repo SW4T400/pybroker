@@ -1200,7 +1200,7 @@ class Strategy(
                 and self._after_exec_fn is None
                 and all(map(lambda e: e.fn is None, self._executions))
             )
-            portfolio = Portfolio(
+            portfolio = Portfolio( #TODO: portfolio is populated during walkforward
                 self._config.initial_cash,
                 self._config.fee_mode,
                 self._config.fee_amount,
@@ -1385,7 +1385,7 @@ class Strategy(
                 
 
             if not train_only and not test_data.empty:
-                self.backtest_executions(
+                self.backtest_executions( #TODO: backesting executions
                     config=self._config,
                     executions=self._executions,
                     before_exec_fn=self._before_exec_fn,
@@ -1506,7 +1506,7 @@ class Strategy(
             portfolio_df[col] = quantize(portfolio_df, col)
         orders_df = pd.DataFrame.from_records(
             portfolio.orders, columns=Order._fields, index="id"
-        )
+        ) #TODO: portfolio.orders into results df
         for col in ("limit_price", "fill_price", "fees"):
             orders_df[col] = quantize(orders_df, col)
         trades_df = pd.DataFrame.from_records(

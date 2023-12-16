@@ -191,7 +191,9 @@ class Order(NamedTuple):
     limit_price: Optional[Decimal]
     fill_price: Decimal
     fees: Decimal
-
+    # stop_price:Decimal
+    # TODO: FEAT - at some point we need to add a line where the stop and take profit is at 
+    # any given bar - for visualization!
 
 class PortfolioBar(NamedTuple):
     """Snapshot of :class:`.Portfolio` state, captured per bar.
@@ -400,6 +402,7 @@ class Portfolio:
         limit_price: Optional[Decimal],
         fill_price: Decimal,
         shares: Decimal,
+        # stop_price:Decimal,
     ) -> Order:
         self._order_id += 1
         fees = self._calculate_fees(fill_price, shares)
@@ -412,9 +415,11 @@ class Portfolio:
             fill_price=fill_price,
             shares=shares,
             fees=fees,
+            # stop_price=Stop.limit_price
         )
         self.orders.append(order)
         self.fees += fees
+        # self.stop_price=stop_price
         return order
 
     def _add_trade(
@@ -486,7 +491,7 @@ class Portfolio:
                 stop_value = entry.price - amount
             self._stop_data[stop.id] = _StopData(
                 value=stop_value, stop=stop, entry=entry
-            )
+            ) #TODO: stop value in _add_stops
 
     def _remove_stop_data(self, entry: Entry):
         for stop in entry.stops:
@@ -549,6 +554,7 @@ class Portfolio:
             limit_price=limit_price,
             fill_price=fill_price,
             shares=covered.filled_shares + bought_shares,
+            # stop_price=Stop.limit_price
         )
         return order
 
@@ -715,6 +721,7 @@ class Portfolio:
             limit_price=limit_price,
             fill_price=fill_price,
             shares=sold.filled_shares + short_shares,
+            # stop_price=Stop.limit_price
         )
         return order
 
@@ -1039,7 +1046,7 @@ class Portfolio:
             return False
         order_type: Literal["buy", "sell"]
         stop_shares = entry.shares
-        if stop.pos_type == "long":
+        if stop.pos_type == "long": #TODO: stop.limit_price check inside _trigger_stop
             if stop.limit_price is not None and fill_price < stop.limit_price:
                 return False
             self._exit_long(
@@ -1062,6 +1069,7 @@ class Portfolio:
             limit_price=stop.limit_price,
             fill_price=fill_price,
             shares=stop_shares,
+            # stop_price=stop.limit_price
         )
         return True
 
