@@ -24,7 +24,7 @@ from pybroker.common import (
 from pybroker.scope import PriceScope, StaticScope
 from collections import deque
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import (
     Callable,
     Final,
@@ -36,6 +36,7 @@ from typing import (
 )
 
 _DECIMAL_100: Final = Decimal(100)
+_DECIMAL_8DP: Final = Decimal("0.00000001")
 
 
 class Stop(NamedTuple):
@@ -140,6 +141,7 @@ class Entry:
     stops: list[Stop] = field(default_factory=list)
     mae: Decimal = field(default_factory=Decimal)
     mfe: Decimal = field(default_factory=Decimal)
+    is_yield: bool = field(default=False)
 
 
 @dataclass
@@ -242,6 +244,24 @@ class Order(NamedTuple):
     limit_price: Optional[Decimal]
     fill_price: Decimal
     fees: Decimal
+
+
+class YieldRecord(NamedTuple):
+    """Records a yield accrual or funding rate payment.
+
+    Attributes:
+        date: Date of the accrual or payment.
+        symbol: Ticker symbol.
+        type: Type of record, either ``yield`` or ``funding``.
+        shares: Number of shares accrued (for yield type), 0 for funding.
+        amount: Cash amount (for funding type), or zero for yield.
+    """
+
+    date: np.datetime64
+    symbol: str
+    type: Literal["yield", "funding"]
+    shares: Decimal
+    amount: Decimal
 
 
 class PortfolioBar(NamedTuple):
@@ -419,6 +439,8 @@ class Portfolio:
         self._entry_id: int = 0
         self._trade_id: int = 0
         self._stop_records: list[StopRecord] = []
+        self.yield_records: deque[YieldRecord] = deque()
+        self._yield_entries: dict[str, Entry] = {}
 
     def _calculate_fees(
         self,
@@ -846,6 +868,11 @@ class Portfolio:
                 )
                 self._remove_stop_data(entry)
                 pos.entries.popleft()
+                if (
+                    entry.is_yield
+                    and self._yield_entries.get(entry.symbol) is entry
+                ):
+                    del self._yield_entries[entry.symbol]
             else:
                 self._exit_long(
                     date, pos, entry, rem_shares, fill_price, stop_type=None
@@ -872,7 +899,10 @@ class Portfolio:
         pos.shares -= shares
         entry.shares -= shares
         pnl_per_bar = entry_pnl if not entry.bars else entry_pnl / entry.bars
-        return_pct = ((fill_price / entry.price) - 1) * 100
+        if entry.price == 0:
+            return_pct = Decimal(0)
+        else:
+            return_pct = ((fill_price / entry.price) - 1) * 100
         pnl = fill_price - entry.price
         mae = pnl if pnl < 0 and pnl < entry.mae else entry.mae
         mfe = pnl if pnl > 0 and pnl > entry.mfe else entry.mfe
@@ -900,6 +930,8 @@ class Portfolio:
         if pos.type == "long":
             if pos.symbol in self.long_positions:
                 del self.long_positions[pos.symbol]
+            if pos.symbol in self._yield_entries:
+                del self._yield_entries[pos.symbol]
         else:
             if pos.symbol in self.short_positions:
                 del self.short_positions[pos.symbol]
@@ -1073,6 +1105,136 @@ class Portfolio:
             for entry in pos.entries:
                 entry.bars += 1
 
+    def accrue_yield(
+        self,
+        date: np.datetime64,
+        symbol: str,
+        shares: Decimal,
+        precision: Optional[Decimal] = _DECIMAL_8DP,
+    ) -> Optional[Entry]:
+        """Accrues yield shares on an existing long position.
+
+        The accrued shares are added as a zero-cost-basis entry, meaning
+        they generate full proceeds as profit when sold. This correctly
+        models staking/earn yield where shares are received for free.
+
+        Consecutive accruals on the same symbol are consolidated into a
+        single yield entry to keep the entries deque small.
+
+        Args:
+            date: Date of the yield accrual.
+            symbol: Ticker symbol of the position to accrue yield on.
+            shares: Number of shares to accrue. Truncated (rounded down)
+                to ``precision`` step size.
+            precision: Step size for truncating the accrued shares.
+                Defaults to ``Decimal('0.00000001')`` (8 decimal places),
+                matching Binance's universal truncation rule for both
+                funding and earn payments. Set to ``None`` to disable
+                truncation.
+
+        Returns:
+            The yield :class:`.Entry` if accrual was successful,
+            otherwise ``None``.
+        """
+        if precision is not None:
+            shares = (shares / precision).to_integral_value(
+                rounding=ROUND_DOWN
+            ) * precision
+        if shares <= 0:
+            return None
+        if symbol not in self.long_positions:
+            return None
+        pos = self.long_positions[symbol]
+        if not pos.entries:
+            return None
+
+        if symbol in self._yield_entries:
+            yield_entry = self._yield_entries[symbol]
+            if yield_entry in pos.entries:
+                yield_entry.shares += shares
+                pos.shares += shares
+            else:
+                del self._yield_entries[symbol]
+                yield_entry = self._create_yield_entry(
+                    date, symbol, shares, pos
+                )
+        else:
+            yield_entry = self._create_yield_entry(
+                date, symbol, shares, pos
+            )
+
+        self.yield_records.append(
+            YieldRecord(
+                date=date,
+                symbol=symbol,
+                type="yield",
+                shares=shares,
+                amount=Decimal(),
+            )
+        )
+        return yield_entry
+
+    def _create_yield_entry(
+        self,
+        date: np.datetime64,
+        symbol: str,
+        shares: Decimal,
+        pos: Position,
+    ) -> Entry:
+        """Creates a new yield entry with zero cost basis."""
+        self._entry_id += 1
+        entry = Entry(
+            id=self._entry_id,
+            date=date,
+            symbol=symbol,
+            shares=shares,
+            price=Decimal(0),
+            type="long",
+            is_yield=True,
+        )
+        pos.entries.append(entry)
+        pos.shares += shares
+        self._yield_entries[symbol] = entry
+        return entry
+
+    def add_cash_flow(
+        self,
+        date: np.datetime64,
+        symbol: str,
+        amount: Decimal,
+        precision: Optional[Decimal] = _DECIMAL_8DP,
+    ) -> Decimal:
+        """Adds a cash flow to the portfolio (e.g., funding rate payment).
+
+        Args:
+            date: Date of the cash flow.
+            symbol: Ticker symbol associated with the cash flow.
+            amount: Cash amount to add. Positive for inflows
+                (e.g., funding received by shorts), negative for outflows.
+            precision: Step size for truncating the cash amount.
+                Defaults to ``Decimal('0.00000001')`` (8 decimal places),
+                matching Binance's precision. Set to ``None`` to disable
+                truncation.
+
+        Returns:
+            The new cash balance.
+        """
+        if precision is not None:
+            amount = (amount / precision).to_integral_value(
+                rounding=ROUND_DOWN
+            ) * precision
+        self.cash += amount
+        self.yield_records.append(
+            YieldRecord(
+                date=date,
+                symbol=symbol,
+                type="funding",
+                shares=Decimal(),
+                amount=amount,
+            )
+        )
+        return self.cash
+
     def remove_stop(self, stop_id: int) -> bool:
         """Removes a :class:`.Stop` with ``stop_id``."""
         if stop_id in self._stop_data:
@@ -1148,6 +1310,11 @@ class Portfolio:
         for pos, entry in executed:
             pos.entries.remove(entry)
             self._remove_stop_data(entry)
+            if (
+                entry.is_yield
+                and self._yield_entries.get(entry.symbol) is entry
+            ):
+                del self._yield_entries[entry.symbol]
             self._update_position(pos)
 
     def _capture_stop(

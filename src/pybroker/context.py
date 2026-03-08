@@ -1037,6 +1037,72 @@ class ExecContext(BaseContext):
         """
         self._portfolio.remove_stops(val, stop_type)
 
+    def accrue_yield(
+        self,
+        shares: Union[int, float, Decimal],
+        symbol: Optional[str] = None,
+        precision: Optional[Union[str, Decimal]] = Decimal("0.00000001"),
+    ) -> Optional[Entry]:
+        """Accrues yield shares on an existing long position.
+
+        The accrued shares have a zero cost basis, so when sold they
+        generate full proceeds as profit. Use this to model staking
+        rewards, Simple Earn yield, or any coin-denominated income.
+
+        Args:
+            shares: Number of shares to accrue.
+            symbol: Ticker symbol. If ``None``, the ``ExecContext``'s
+                :attr:`.symbol` is used.
+            precision: Step size for truncating accrued shares. Defaults
+                to ``Decimal('0.00000001')`` (8 dp), matching Binance's
+                universal truncation. Pass ``None`` to disable.
+
+        Returns:
+            The yield :class:`pybroker.portfolio.Entry` if successful,
+            otherwise ``None``.
+        """
+        symbol = self._get_symbol(symbol)
+        if self._curr_date is None:
+            raise ValueError("_curr_date is not set.")
+        prec = Decimal(precision) if precision is not None else None
+        return self._portfolio.accrue_yield(
+            date=self._curr_date,
+            symbol=symbol,
+            shares=to_decimal(shares),
+            precision=prec,
+        )
+
+    def add_cash_flow(
+        self,
+        amount: Union[int, float, Decimal],
+        symbol: Optional[str] = None,
+        precision: Optional[Union[str, Decimal]] = Decimal("0.00000001"),
+    ) -> Decimal:
+        """Adds a cash flow to the portfolio (e.g., funding rate payment).
+
+        Args:
+            amount: Cash amount. Positive for inflows (e.g., funding
+                received by shorts), negative for outflows.
+            symbol: Ticker symbol associated with the cash flow. If
+                ``None``, the ``ExecContext``'s :attr:`.symbol` is used.
+            precision: Step size for truncating the cash amount. Defaults
+                to ``Decimal('0.00000001')`` (8 dp), matching Binance's
+                universal truncation. Pass ``None`` to disable.
+
+        Returns:
+            New cash balance.
+        """
+        symbol = self._get_symbol(symbol)
+        if self._curr_date is None:
+            raise ValueError("_curr_date is not set.")
+        prec = Decimal(precision) if precision is not None else None
+        return self._portfolio.add_cash_flow(
+            date=self._curr_date,
+            symbol=symbol,
+            amount=to_decimal(amount),
+            precision=prec,
+        )
+
     def _get_symbol(self, symbol: Optional[str] = None) -> str:
         if symbol is not None:
             return symbol

@@ -3556,3 +3556,359 @@ def test_short_only_mode():
     assert not portfolio.short_positions
     assert len(portfolio.trades) == 1
     assert portfolio.trades[0].shares == 100
+
+
+# ===========================================================================
+# Yield accrual and funding rate tests
+# ===========================================================================
+
+
+def test_accrue_yield_basic():
+    """Accrue yield on a long position increases shares correctly."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    buy_price = Decimal(100)
+    portfolio.buy(DATE_1, SYMBOL_1, 100, buy_price)
+    pos = portfolio.long_positions[SYMBOL_1]
+    assert pos.shares == 100
+
+    yield_shares = Decimal(5)
+    result = portfolio.accrue_yield(DATE_2, SYMBOL_1, yield_shares)
+    assert result is not None
+    assert result.is_yield is True
+    assert result.price == Decimal(0)
+    assert result.shares == yield_shares
+    assert pos.shares == Decimal(105)
+    assert len(pos.entries) == 2
+    # Original entry unchanged
+    assert pos.entries[0].shares == Decimal(100)
+    assert pos.entries[0].price == buy_price
+    assert pos.entries[0].is_yield is False
+    # Yield entry
+    assert pos.entries[1].shares == yield_shares
+    assert pos.entries[1].price == Decimal(0)
+    assert pos.entries[1].is_yield is True
+    # Invariant
+    assert pos.shares == sum(e.shares for e in pos.entries)
+
+
+def test_accrue_yield_consolidation():
+    """Multiple accruals consolidate into one yield entry."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, 100, Decimal(100))
+    portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal(2))
+    portfolio.accrue_yield(DATE_2, SYMBOL_1, Decimal(3))
+    pos = portfolio.long_positions[SYMBOL_1]
+    assert len(pos.entries) == 2  # original + 1 consolidated yield
+    assert pos.entries[1].shares == Decimal(5)
+    assert pos.shares == Decimal(105)
+    assert pos.shares == sum(e.shares for e in pos.entries)
+
+
+def test_accrue_yield_no_position_returns_none():
+    """Accruing yield with no open position returns None."""
+    portfolio = Portfolio(CASH)
+    result = portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal(5))
+    assert result is None
+
+
+def test_accrue_yield_zero_shares_returns_none():
+    """Accruing zero or negative yield returns None."""
+    portfolio = Portfolio(CASH)
+    portfolio.buy(DATE_1, SYMBOL_1, 100, Decimal(100))
+    assert portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal(0)) is None
+    assert portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal(-1)) is None
+
+
+def test_accrue_yield_then_sell_all_correct_pnl():
+    """Selling all shares after yield accrual produces correct PnL."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    buy_price = Decimal(10)
+    sell_price = Decimal(12)
+    portfolio.buy(DATE_1, SYMBOL_1, 100, buy_price)
+    portfolio.accrue_yield(DATE_2, SYMBOL_1, Decimal(5))
+    # Sell all 105 shares
+    portfolio.sell(DATE_3, SYMBOL_1, 105, sell_price)
+    assert SYMBOL_1 not in portfolio.long_positions
+    assert len(portfolio.trades) == 2
+    # Trade 1: original 100 shares at cost 10, sold at 12
+    t1 = portfolio.trades[0]
+    assert t1.shares == Decimal(100)
+    assert t1.entry == buy_price
+    assert t1.exit == sell_price
+    assert t1.pnl == Decimal(100) * (sell_price - buy_price)  # 200
+    # Trade 2: yield 5 shares at cost 0, sold at 12
+    t2 = portfolio.trades[1]
+    assert t2.shares == Decimal(5)
+    assert t2.entry == Decimal(0)
+    assert t2.exit == sell_price
+    assert t2.pnl == Decimal(5) * sell_price  # 60
+    # Total PnL
+    assert portfolio.pnl == Decimal(260)
+    # Cash: started 100k, spent 1000 on buy, got 105*12=1260 from sell
+    assert portfolio.cash == Decimal(CASH) - Decimal(1000) + Decimal(1260)
+
+
+def test_accrue_yield_fifo_partial_sell():
+    """FIFO sell consumes original entry first, then yield entry."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    buy_price = Decimal(10)
+    sell_price = Decimal(12)
+    portfolio.buy(DATE_1, SYMBOL_1, 100, buy_price)
+    portfolio.accrue_yield(DATE_2, SYMBOL_1, Decimal(10))
+    # Sell 105 of 110 total
+    portfolio.sell(DATE_3, SYMBOL_1, 105, sell_price)
+    pos = portfolio.long_positions[SYMBOL_1]
+    # Remaining: 5 yield shares
+    assert pos.shares == Decimal(5)
+    assert len(pos.entries) == 1
+    assert pos.entries[0].is_yield is True
+    assert pos.entries[0].shares == Decimal(5)
+    assert pos.entries[0].price == Decimal(0)
+    # Trades: 100 original + 5 from yield entry
+    assert len(portfolio.trades) == 2
+    assert portfolio.trades[0].shares == Decimal(100)
+    assert portfolio.trades[0].pnl == Decimal(200)  # 100*(12-10)
+    assert portfolio.trades[1].shares == Decimal(5)
+    assert portfolio.trades[1].pnl == Decimal(60)  # 5*12
+
+
+def test_accrue_yield_with_capture_bar():
+    """capture_bar correctly values position with accrued yield shares."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    buy_price = Decimal(100)
+    close_price = Decimal(110)
+    shares = Decimal(10)
+    portfolio.buy(DATE_1, SYMBOL_1, shares, buy_price)
+    portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal(1))
+    df = pd.DataFrame(
+        [[SYMBOL_1, DATE_1, close_price, close_price, close_price]],
+        columns=["symbol", "date", "close", "low", "high"],
+    )
+    df = df.set_index(["symbol", "date"])
+    portfolio.capture_bar(DATE_1, df)
+    pos = portfolio.long_positions[SYMBOL_1]
+    # 11 total shares * 110 = 1210
+    assert pos.equity == Decimal(11) * close_price
+    assert pos.shares == Decimal(11)
+
+
+def test_accrue_yield_entry_consumed_then_new_accrual():
+    """After yield entry is consumed by sell, new accrual creates fresh entry."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, 100, Decimal(10))
+    portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal(5))
+    # Sell everything
+    portfolio.sell(DATE_2, SYMBOL_1, 105, Decimal(12))
+    assert SYMBOL_1 not in portfolio.long_positions
+    # Buy again and accrue
+    portfolio.buy(DATE_3, SYMBOL_1, 50, Decimal(11))
+    result = portfolio.accrue_yield(DATE_3, SYMBOL_1, Decimal(2))
+    assert result is not None
+    pos = portfolio.long_positions[SYMBOL_1]
+    assert pos.shares == Decimal(52)
+    assert len(pos.entries) == 2
+    assert pos.entries[1].is_yield is True
+    assert pos.entries[1].shares == Decimal(2)
+
+
+def test_accrue_yield_records_logged():
+    """Yield records are appended for each accrual."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, 100, Decimal(10))
+    portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal(3))
+    portfolio.accrue_yield(DATE_2, SYMBOL_1, Decimal(2))
+    assert len(portfolio.yield_records) == 2
+    r1 = portfolio.yield_records[0]
+    assert r1.date == DATE_1
+    assert r1.symbol == SYMBOL_1
+    assert r1.type == "yield"
+    assert r1.shares == Decimal(3)
+    r2 = portfolio.yield_records[1]
+    assert r2.date == DATE_2
+    assert r2.shares == Decimal(2)
+
+
+def test_add_cash_flow_positive():
+    """Positive cash flow (funding received) increases cash."""
+    portfolio = Portfolio(CASH)
+    portfolio.sell(DATE_1, SYMBOL_1, 100, Decimal(50))  # short position
+    funding = Decimal(500)
+    new_cash = portfolio.add_cash_flow(DATE_1, SYMBOL_1, funding)
+    assert portfolio.cash == Decimal(CASH) + funding
+    assert new_cash == portfolio.cash
+    assert len(portfolio.yield_records) == 1
+    rec = portfolio.yield_records[0]
+    assert rec.type == "funding"
+    assert rec.amount == funding
+    assert rec.shares == Decimal(0)
+
+
+def test_add_cash_flow_negative():
+    """Negative cash flow (funding paid) decreases cash."""
+    portfolio = Portfolio(CASH)
+    outflow = Decimal(-200)
+    portfolio.add_cash_flow(DATE_1, SYMBOL_1, outflow)
+    assert portfolio.cash == Decimal(CASH) + outflow
+
+
+def test_add_cash_flow_captured_in_bar():
+    """Cash flow is reflected in the next capture_bar equity snapshot."""
+    portfolio = Portfolio(CASH)
+    portfolio.sell(DATE_1, SYMBOL_1, 100, Decimal(50))
+    portfolio.add_cash_flow(DATE_1, SYMBOL_1, Decimal(300))
+    close_price = Decimal(50)
+    df = pd.DataFrame(
+        [[SYMBOL_1, DATE_1, close_price, close_price, close_price]],
+        columns=["symbol", "date", "close", "low", "high"],
+    )
+    df = df.set_index(["symbol", "date"])
+    portfolio.capture_bar(DATE_1, df)
+    bar = portfolio.bars[0]
+    assert bar.cash == Decimal(CASH) + Decimal(300)
+
+
+def test_accrue_yield_invariant_maintained_across_multiple_ops():
+    """Invariant pos.shares == sum(entry.shares) holds through complex ops."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    # Buy, accrue, partial sell, accrue again
+    portfolio.buy(DATE_1, SYMBOL_1, 100, Decimal(10))
+    portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal("3.5"))
+    portfolio.sell(DATE_2, SYMBOL_1, 50, Decimal(12))
+    portfolio.accrue_yield(DATE_2, SYMBOL_1, Decimal("1.2"))
+    pos = portfolio.long_positions[SYMBOL_1]
+    entry_sum = sum(e.shares for e in pos.entries)
+    assert pos.shares == entry_sum
+
+
+def test_accrue_yield_return_pct_zero_for_yield_entry():
+    """Selling a yield entry (price=0) doesn't raise division by zero."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, 10, Decimal(100))
+    portfolio.accrue_yield(DATE_1, SYMBOL_1, Decimal(5))
+    # Sell all — FIFO: 10 original then 5 yield
+    portfolio.sell(DATE_2, SYMBOL_1, 15, Decimal(110))
+    assert len(portfolio.trades) == 2
+    yield_trade = portfolio.trades[1]
+    assert yield_trade.entry == Decimal(0)
+    assert yield_trade.return_pct == Decimal(0)
+    assert yield_trade.pnl == Decimal(5) * Decimal(110)
+
+
+# ===========================================================================
+# Precision / step size tests
+# ===========================================================================
+
+
+def test_accrue_yield_precision_btc():
+    """BTC yield rounded down to 8 decimal places (step=0.00000001)."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, Decimal("1.5"), Decimal(50000))
+    # Raw yield: 1.5 * 0.005 / 365 = 0.00002054794520547945...
+    raw_yield = Decimal("1.5") * Decimal("0.005") / 365
+    btc_precision = Decimal("0.00000001")
+    portfolio.accrue_yield(
+        DATE_1, SYMBOL_1, raw_yield, precision=btc_precision
+    )
+    pos = portfolio.long_positions[SYMBOL_1]
+    yield_entry = pos.entries[1]
+    # Should be truncated to 0.00002054 (not rounded up)
+    assert yield_entry.shares == Decimal("0.00002054")
+    assert pos.shares == Decimal("1.50002054")
+
+
+def test_accrue_yield_precision_shib():
+    """SHIB yield rounded down to whole coins (step=1)."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, Decimal("10000000"), Decimal("0.00001"))
+    # Raw yield: 10M * 0.02 / 365 = 547.945205...
+    raw_yield = Decimal("10000000") * Decimal("0.02") / 365
+    shib_precision = Decimal("1")
+    portfolio.accrue_yield(
+        DATE_1, SYMBOL_1, raw_yield, precision=shib_precision
+    )
+    pos = portfolio.long_positions[SYMBOL_1]
+    yield_entry = pos.entries[1]
+    assert yield_entry.shares == Decimal("547")
+
+
+def test_accrue_yield_precision_rounds_to_zero():
+    """If precision truncates yield to zero, no accrual happens."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, Decimal("0.001"), Decimal(50000))
+    # Tiny yield that rounds to 0 at 8dp
+    tiny_yield = Decimal("0.000000001")
+    result = portfolio.accrue_yield(
+        DATE_1, SYMBOL_1, tiny_yield, precision=Decimal("0.00000001")
+    )
+    assert result is None
+    pos = portfolio.long_positions[SYMBOL_1]
+    assert len(pos.entries) == 1  # no yield entry created
+
+
+def test_accrue_yield_default_8dp_precision():
+    """Default precision truncates to 8 decimal places."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, Decimal("1"), Decimal(100))
+    raw_yield = Decimal("0.00002054794520547945")
+    portfolio.accrue_yield(DATE_1, SYMBOL_1, raw_yield)
+    pos = portfolio.long_positions[SYMBOL_1]
+    assert pos.entries[1].shares == Decimal("0.00002054")
+
+
+def test_accrue_yield_no_precision():
+    """With precision=None, full Decimal resolution is preserved."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, Decimal("1"), Decimal(100))
+    raw_yield = Decimal("0.00002054794520547945")
+    portfolio.accrue_yield(DATE_1, SYMBOL_1, raw_yield, precision=None)
+    pos = portfolio.long_positions[SYMBOL_1]
+    assert pos.entries[1].shares == raw_yield
+
+
+def test_add_cash_flow_precision_usdt():
+    """Funding payment rounded down to 2 decimal places (USDT)."""
+    portfolio = Portfolio(CASH)
+    portfolio.sell(DATE_1, SYMBOL_1, 100, Decimal(50))
+    raw_funding = Decimal("15.789123")
+    portfolio.add_cash_flow(
+        DATE_1, SYMBOL_1, raw_funding, precision=Decimal("0.01")
+    )
+    # Rounded down to 15.78
+    assert portfolio.cash == Decimal(CASH) + Decimal("15.78")
+
+
+def test_add_cash_flow_precision_usdc_8dp():
+    """Funding payment rounded down to 8 decimal places."""
+    portfolio = Portfolio(CASH)
+    raw_funding = Decimal("0.123456789999")
+    portfolio.add_cash_flow(
+        DATE_1, SYMBOL_1, raw_funding, precision=Decimal("0.00000001")
+    )
+    assert portfolio.cash == Decimal(CASH) + Decimal("0.12345678")
+
+
+def test_accrue_yield_precision_cumulative_over_days():
+    """Precision rounding accumulates correctly over multiple days."""
+    portfolio = Portfolio(CASH, enable_fractional_shares=True)
+    portfolio.buy(DATE_1, SYMBOL_1, Decimal("1.0"), Decimal(50000))
+    btc_step = Decimal("0.00000001")
+    daily_rate = Decimal("0.005") / 365  # ~0.5% APY
+
+    # Accrue 365 days
+    total_accrued = Decimal(0)
+    for day in range(365):
+        balance = portfolio.long_positions[SYMBOL_1].shares
+        raw_yield = balance * daily_rate
+        portfolio.accrue_yield(
+            DATE_1, SYMBOL_1, raw_yield, precision=btc_step
+        )
+        pos = portfolio.long_positions[SYMBOL_1]
+        # Invariant must hold every single day
+        assert pos.shares == sum(e.shares for e in pos.entries)
+
+    pos = portfolio.long_positions[SYMBOL_1]
+    # After 365 days at ~0.5% APY, should be close to 1.005 BTC
+    assert pos.shares > Decimal("1.004")
+    assert pos.shares < Decimal("1.006")
+    # All yield records logged
+    assert len(portfolio.yield_records) == 365

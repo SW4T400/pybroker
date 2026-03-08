@@ -63,6 +63,7 @@ from pybroker.portfolio import (
     Order as Order,
     Position as Position,
     Trade as Trade,
+    YieldRecord as YieldRecord,
 )
 from pybroker.scope import (
     disable_logging as disable_logging,
