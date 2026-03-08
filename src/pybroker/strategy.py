@@ -1345,7 +1345,6 @@ class Strategy(
         train_only: bool,
         warmup: Optional[int],
     ) -> dict[str, pd.DataFrame]:
-        sessions: dict[str, dict] = defaultdict(dict)
         exit_dates: dict[str, np.datetime64] = {}
         if self._config.exit_on_last_bar:
             for exec in self._executions:
@@ -1356,6 +1355,7 @@ class Strategy(
                     if len(sym_dates):
                         exit_dates[sym] = sym_dates.max()
         signals: dict[str, pd.DataFrame] = {}
+        signals_to_concat: dict[str, list[pd.DataFrame]] = defaultdict(list)
         for train_idx, test_idx in self.walkforward_split(
             df=df,
             windows=windows,
@@ -1363,6 +1363,7 @@ class Strategy(
             train_size=train_size,
             shuffle=shuffle,
         ):
+            sessions: dict[str, dict] = defaultdict(dict)
             models: dict[ModelSymbol, TrainedModel] = {}
             train_data = df.loc[train_idx]
             test_data = df.loc[test_idx]
@@ -1411,10 +1412,9 @@ class Strategy(
                 warmup=warmup,
             )
             for sym, signals_df in split_signals.items():
-                if sym in signals:
-                    signals[sym] = pd.concat([signals[sym], signals_df])
-                else:
-                    signals[sym] = signals_df
+                signals_to_concat[sym].append(signals_df)
+        for sym, dfs in signals_to_concat.items():
+            signals[sym] = pd.concat(dfs) if len(dfs) > 1 else dfs[0]
         return signals
 
     def _filter_dates(

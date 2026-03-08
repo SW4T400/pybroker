@@ -51,7 +51,7 @@ class RandomSlippageModel(SlippageModel):
         sell_shares: Optional[Decimal] = None,
     ):
         if buy_shares or sell_shares:
-            slippage_pct = Decimal(random.uniform(self.min_pct, self.max_pct))
+            slippage_pct = Decimal(str(random.uniform(self.min_pct, self.max_pct)))
             if buy_shares:
                 ctx.buy_shares = buy_shares - slippage_pct * buy_shares
             if sell_shares:

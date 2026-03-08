@@ -215,15 +215,16 @@ class IndicatorsMixin:
         scope.logger.indicator_data_start(uncached_ind_syms)
         scope.logger.info_indicator_data_start(uncached_ind_syms)
         sym_data: dict[str, dict[str, Optional[NDArray]]] = defaultdict(dict)
+        grouped = df.groupby(DataCol.SYMBOL.value)
         for _, sym in uncached_ind_syms:
             if sym in sym_data:
                 continue
-            data = df[df[DataCol.SYMBOL.value] == sym]
+            data = grouped.get_group(sym)
             for col in scope.all_data_cols:
                 if col not in data.columns:
                     sym_data[sym][col] = None
                     continue
-                sym_data[sym][col] = data[col].to_numpy(copy=True)
+                sym_data[sym][col] = data[col].to_numpy()
         for i, (ind_sym, series) in enumerate(
             self._run_indicators(sym_data, uncached_ind_syms, disable_parallel)
         ):
@@ -381,15 +382,23 @@ class IndicatorSet(IndicatorsMixin):
         sym_dict: dict[str, dict[str, pd.Series]] = defaultdict(dict)
         for ind_sym, series in ind_dict.items():
             sym_dict[ind_sym.symbol][ind_sym.ind_name] = series
-        data: dict[str, list] = defaultdict(list)
-        for sym, ind_series in sym_dict.items():
-            dates = df[df[DataCol.SYMBOL.value] == sym][DataCol.DATE.value]
-            data[DataCol.SYMBOL.value].extend(
-                itertools.repeat(sym, len(dates))
-            )
-            data[DataCol.DATE.value].extend(dates)
-            for ind_name, series in ind_series.items():
-                data[ind_name].extend(series.values)
+        grouped = df.groupby(DataCol.SYMBOL.value)
+        sym_list = list(sym_dict.keys())
+        date_arrays = []
+        counts = []
+        ind_arrays: dict[str, list[NDArray]] = defaultdict(list)
+        for sym in sym_list:
+            dates = grouped.get_group(sym)[DataCol.DATE.value].values
+            date_arrays.append(dates)
+            counts.append(len(dates))
+            for ind_name, series in sym_dict[sym].items():
+                ind_arrays[ind_name].append(series.values)
+        data: dict[str, Any] = {
+            DataCol.SYMBOL.value: np.repeat(sym_list, counts),
+            DataCol.DATE.value: np.concatenate(date_arrays),
+        }
+        for ind_name, arrays in ind_arrays.items():
+            data[ind_name] = np.concatenate(arrays)
         return pd.DataFrame.from_dict(data)
 
 
