@@ -448,6 +448,7 @@ class Portfolio:
         fill_price: Decimal,
         shares: Decimal,
         order_type: Literal["buy", "sell"],
+        date: np.datetime64 = None,
     ) -> Decimal:
         fees = Decimal()
         if self._fee_mode is None or self._fee_amount is None:
@@ -460,6 +461,7 @@ class Portfolio:
                         shares=shares,
                         fill_price=fill_price,
                         order_type=order_type,
+                        date=date,
                     )
                 )
             )
@@ -517,7 +519,7 @@ class Portfolio:
         shares: Decimal,
     ) -> Order:
         self._order_id += 1
-        fees = self._calculate_fees(symbol, fill_price, shares, type)
+        fees = self._calculate_fees(symbol, fill_price, shares, type, date)
         order = Order(
             id=self._order_id,
             date=date,

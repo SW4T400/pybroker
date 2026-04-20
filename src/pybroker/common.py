@@ -165,12 +165,14 @@ class FeeInfo(NamedTuple):
         shares: Number of shares in order.
         fill_price: Fill price of order.
         order_type: Type of order, either "buy" or "sell".
+        date: Date of the order fill.
     """
 
     symbol: str
     shares: Decimal
     fill_price: Decimal
     order_type: Literal["buy", "sell"]
+    date: np.datetime64 = None
 
 
 class PositionMode(Enum):
@@ -365,10 +367,10 @@ def verify_date_range(start_date: datetime, end_date: datetime):
 
 
 def default_parallel() -> Parallel:
-    """Returns a :class:`joblib.Parallel` instance with ``n_jobs`` equal to
-    the number of CPUs on the host machine.
+    """Returns a :class:`joblib.Parallel` instance with ``n_jobs`` limited
+    to leave 4 cores free for other services.
     """
-    return Parallel(n_jobs=os.cpu_count(), prefer="processes", backend="loky")
+    return Parallel(n_jobs=10, prefer="processes", backend="loky")
 
 
 def get_unique_sorted_dates(col: pd.Series) -> Sequence[np.datetime64]:
