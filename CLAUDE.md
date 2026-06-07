@@ -21,3 +21,20 @@ Persist work to the **basic-memory MCP** (streamable-http, default project `note
   previous work, research, decisions, or memory. Do NOT auto-search every session.
 
 Applies to both Claude Code and Codex.
+
+## Git branch safety -- CRITICAL (work ONLY on `main`)
+
+**The live Prefect workers execute flows directly from the LOCAL working tree.**
+Deployments are registered with `from_source(source=.../scr)` + a
+`set_working_directory` pull step, so whatever is checked out on disk is EXACTLY
+what the production servers run at the next tick. A local branch switch silently
+changes live trading / data-pipeline code.
+
+- ALWAYS stay on `main`. Make every change on `main`.
+- NEVER run `git checkout <branch>` / `git switch <branch>`, and NEVER
+  create-and-switch to a feature branch, in any working clone under
+  `/home/stefa/pythoncode/github_clones`. FORBIDDEN -- even "just to isolate" or
+  "I'll switch back."
+- Commit directly to `main` (only when the user asks). Do NOT create feature branches.
+- If branch isolation is genuinely required, use a SEPARATE `git worktree` in a
+  different directory so the primary clone STAYS on `main` -- never an in-place checkout.
